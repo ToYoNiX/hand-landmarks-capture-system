@@ -901,15 +901,22 @@ export default function HandLandmarkerDemo() {
             {imgQueue.length > 0 && (
               <div style={s.thumbStrip}>
                 {imgQueue.map((entry, index) => (
-                  <button
+                  <div
                     key={entry.objectUrl}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     style={{
                       ...s.thumbButton,
                       ...(imgCursor === index ? s.thumbButtonActive : {}),
                       ...(entry.status === "error" ? s.thumbButtonError : {}),
                     }}
                     onClick={() => setImgCursor(index)}
+                    onKeyDown={event => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setImgCursor(index);
+                      }
+                    }}
                   >
                     <img src={entry.objectUrl} alt="Thumbnail" style={s.thumbImg} />
                     <button
@@ -936,7 +943,7 @@ export default function HandLandmarkerDemo() {
                     >
                       {entry.status === "ok" ? "✓" : entry.status === "error" ? "✗" : "…"}
                     </span>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -1028,11 +1035,16 @@ const s = {
     width: "100%", maxWidth: 860,
   },
   modeTab: {
-    flex: 1, padding: "10px 0", background: "transparent", border: "none", color: "#64748b",
-    fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+    flex: 1, padding: "10px 0", background: "transparent",
+    borderWidth: 0, borderStyle: "solid", borderColor: "transparent",
+    color: "#64748b", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
     transition: "background 0.15s, color 0.15s",
   },
-  modeTabActive: { background: "#1e293b", color: "#e2e8f0", borderBottom: "2px solid #6366f1" },
+  modeTabActive: {
+    background: "#1e293b",
+    color: "#e2e8f0",
+    boxShadow: "inset 0 -2px 0 0 #6366f1",
+  },
   videoWrap: {
     position: "relative", width: "100%", maxWidth: 860, aspectRatio: "16/9",
     background: "#1e293b", borderRadius: 12, overflow: "hidden",
@@ -1146,7 +1158,8 @@ const s = {
   thumbStrip: { display: "flex", gap: 8, overflowX: "auto", padding: "8px 0" },
   thumbButton: {
     position: "relative", width: 72, height: 56, flexShrink: 0,
-    padding: 0, border: "2px solid #334155", borderRadius: 8, background: "#0f172a",
+    padding: 0, borderWidth: 2, borderStyle: "solid", borderColor: "#334155",
+    borderRadius: 8, background: "#0f172a",
     cursor: "pointer", overflow: "hidden",
   },
   thumbButtonActive: { borderColor: "#6366f1" },
