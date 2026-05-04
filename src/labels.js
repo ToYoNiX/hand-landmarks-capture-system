@@ -2,7 +2,7 @@ export const REQUIRED = 50;
 
 export const LABELS = [
   // ── Numbers ────────────────────────────────────────────────────────────────
-  { ar: "واحد",    category: "Numbers",     type: "static",  mirrorable: false, videoUrl: null },
+  { ar: "واحد",    category: "Numbers",     type: "static",  mirrorable: true, videoUrl: null },
   { ar: "اثنان",   category: "Numbers",     type: "static",  mirrorable: false, videoUrl: null },
   { ar: "ثلاثة",   category: "Numbers",     type: "static",  mirrorable: false, videoUrl: null },
   { ar: "أربعة",   category: "Numbers",     type: "static",  mirrorable: false, videoUrl: null },

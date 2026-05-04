@@ -69,6 +69,7 @@ export default function HandLandmarkerDemo() {
   const isRecordingRef     = useRef(false);
   const frameBufferRef     = useRef([]);
   const resetTimerRef      = useRef(null);
+  const staticTimerRef     = useRef(null);
   const dropdownRef        = useRef(null);
   const fileInputRef       = useRef(null);
   const imgPreviewRef      = useRef(null);
@@ -84,6 +85,7 @@ export default function HandLandmarkerDemo() {
   const [selectedLabel, setSelectedLabel] = useState(null);
   const [mirrorable,    setMirrorable]    = useState(false);
   const [signType,      setSignType]      = useState("dynamic");
+  const [customLabel,   setCustomLabel]   = useState("");
   const [dropdownOpen,  setDropdownOpen]  = useState(false);
   const [recStatus,     setRecStatus]     = useState(REC.IDLE);
   const [recError,      setRecError]      = useState(null);
@@ -96,6 +98,8 @@ export default function HandLandmarkerDemo() {
   const [imgSaveStatus, setImgSaveStatus] = useState(REC.IDLE);
   const [imgSaveError,  setImgSaveError]  = useState(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [staticCountdown, setStaticCountdown] = useState(0);
+  const [pendingStatic, setPendingStatic] = useState(null);
 
   // ── Fetch sample counts from Storage ──────────────────────────────────────
   useEffect(() => {
@@ -173,6 +177,7 @@ export default function HandLandmarkerDemo() {
       imgQueueRef.current.forEach(entry => URL.revokeObjectURL(entry.objectUrl));
       landmarkerRef.current?.close();
       clearTimeout(resetTimerRef.current);
+      clearTimeout(staticTimerRef.current);
     };
   }, []);
 
@@ -343,6 +348,7 @@ export default function HandLandmarkerDemo() {
     captureModeRef.current = mode;
     setDropdownOpen(false);
     setLandmarkData(null);
+    setPendingStatic(null);
     setStatus(STATUS.NO_HAND);
     clearCanvas();
 
@@ -473,10 +479,36 @@ export default function HandLandmarkerDemo() {
     setMirrorable(label.mirrorable);
     setRecStatus(REC.IDLE);
     setRecError(null);
+    setPendingStatic(null);
     setDropdownOpen(false);
   }
 
+  function onCustomSelect() {
+    setSelectedLabel({ ar: "Custom", type: "dynamic", mirrorable: false, custom: true });
+    setSignType("dynamic");
+    setMirrorable(false);
+    setCustomLabel("");
+    setRecStatus(REC.IDLE);
+    setRecError(null);
+    setPendingStatic(null);
+    setDropdownOpen(false);
+  }
+
+  function getActiveLabel() {
+    if (!selectedLabel) return null;
+    if (selectedLabel.custom) {
+      const trimmed = customLabel.trim();
+      if (!trimmed) return null;
+      return { ar: trimmed, type: signType, mirrorable };
+    }
+    return selectedLabel;
+  }
+
   function toggleRecording() {
+    if (signType === "static") {
+      if (!canRecord || staticCountdown > 0) return;
+      return startStaticCapture();
+    }
     if (recStatus === REC.RECORDING) return stopRecording();
     if (!canRecord) return;
     isRecordingRef.current = true;
@@ -484,6 +516,62 @@ export default function HandLandmarkerDemo() {
     setLiveFrameCount(0);
     setRecError(null);
     setRecStatus(REC.RECORDING);
+  }
+
+  async function startStaticCapture() {
+    setRecError(null);
+    setRecStatus(REC.RECORDING);
+    setStaticCountdown(3);
+
+    let remaining = 3;
+    const tick = () => {
+      remaining -= 1;
+      setStaticCountdown(remaining);
+      if (remaining > 0) {
+        staticTimerRef.current = setTimeout(tick, 1000);
+        return;
+      }
+      captureStaticFrame();
+    };
+
+    staticTimerRef.current = setTimeout(tick, 1000);
+  }
+
+  async function captureStaticFrame() {
+    const activeLabel = getActiveLabel();
+    const firstHand = landmarkData?.[0] || null;
+    if (!activeLabel) {
+      setRecStatus(REC.IDLE);
+      setStaticCountdown(0);
+      return;
+    }
+    if (!firstHand) {
+      setRecStatus(REC.ERROR);
+      setRecError("No hand detected during capture.");
+      setStaticCountdown(0);
+      return;
+    }
+    setPendingStatic(normalizeHand(firstHand));
+    setRecStatus(REC.IDLE);
+    setStaticCountdown(0);
+  }
+
+  async function saveStaticCapture() {
+    const activeLabel = getActiveLabel();
+    if (!activeLabel || !pendingStatic) return;
+    setRecStatus(REC.SAVING);
+    try {
+      const frames = [{ landmarks: pendingStatic }];
+      await uploadSample(frames, activeLabel, signType, mirrorable);
+      setRecStatus(REC.SAVED);
+      setPendingStatic(null);
+      clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = setTimeout(() => setRecStatus(REC.IDLE), 2500);
+    } catch (err) {
+      console.error("[upload error]", err);
+      setRecStatus(REC.ERROR);
+      setRecError(err.message);
+    }
   }
 
   async function stopRecording() {
@@ -518,9 +606,12 @@ export default function HandLandmarkerDemo() {
       frames = normalised;
     }
 
+    const activeLabel = getActiveLabel();
+    if (!activeLabel) return;
+
     setRecStatus(REC.SAVING);
     try {
-      await uploadSample(frames, selectedLabel, signType, mirrorable);
+      await uploadSample(frames, activeLabel, signType, mirrorable);
       setRecStatus(REC.SAVED);
       clearTimeout(resetTimerRef.current);
       resetTimerRef.current = setTimeout(() => setRecStatus(REC.IDLE), 2500);
@@ -533,10 +624,11 @@ export default function HandLandmarkerDemo() {
 
   function commitCurrent() {
     const entry = imgQueue[imgCursor];
-    if (!entry?.landmarks || !selectedLabel) return;
+    const activeLabel = getActiveLabel();
+    if (!entry?.landmarks || !activeLabel) return;
     setImgSaveStatus(REC.SAVING);
     setImgSaveError(null);
-    uploadSample([{ landmarks: normalizeHand(entry.landmarks) }], selectedLabel, signType, mirrorable)
+    uploadSample([{ landmarks: normalizeHand(entry.landmarks) }], activeLabel, signType, mirrorable)
       .then(() => {
         setImgSaveStatus(REC.SAVED);
         clearTimeout(resetTimerRef.current);
@@ -550,12 +642,13 @@ export default function HandLandmarkerDemo() {
 
   async function commitAllValid() {
     const valid = imgQueue.filter(entry => entry.landmarks);
-    if (!valid.length || !selectedLabel) return;
+    const activeLabel = getActiveLabel();
+    if (!valid.length || !activeLabel) return;
     setImgSaveStatus(REC.SAVING);
     setImgSaveError(null);
     try {
       for (const entry of valid) {
-        await uploadSample([{ landmarks: normalizeHand(entry.landmarks) }], selectedLabel, signType, mirrorable);
+        await uploadSample([{ landmarks: normalizeHand(entry.landmarks) }], activeLabel, signType, mirrorable);
         await delay(50);
       }
       setImgSaveStatus(REC.SAVED);
@@ -568,6 +661,7 @@ export default function HandLandmarkerDemo() {
   }
 
   function renderSignDropdown(disabled) {
+    const isCustom = !!selectedLabel?.custom;
     return (
       <>
         <div ref={dropdownRef} style={s.dropdownWrap}>
@@ -578,9 +672,13 @@ export default function HandLandmarkerDemo() {
           >
             {selectedLabel ? (
               <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span dir="rtl" style={{ fontSize: 18, fontWeight: 700 }}>{selectedLabel.ar}</span>
+                <span dir="rtl" style={{ fontSize: 18, fontWeight: 700 }}>
+                  {selectedLabel.custom ? (customLabel || "Custom sign") : selectedLabel.ar}
+                </span>
                 <span style={s.dropdownMeta}>
-                  {signType} · {counts[labelToPath(selectedLabel.ar)] || 0} / {REQUIRED}
+                  {selectedLabel.custom
+                    ? `${signType} · custom`
+                    : `${signType} · ${counts[labelToPath(selectedLabel.ar)] || 0} / ${REQUIRED}`}
                 </span>
               </span>
             ) : (
@@ -591,6 +689,19 @@ export default function HandLandmarkerDemo() {
 
           {dropdownOpen && (
             <div style={s.dropdownMenu}>
+              <button
+                style={{
+                  ...s.dropdownItem,
+                  ...(selectedLabel?.custom ? s.dropdownItemActive : {}),
+                }}
+                onClick={onCustomSelect}
+              >
+                <span style={s.dropdownAr}>Custom…</span>
+                <span style={s.dropdownRight}>
+                  <span style={s.dropdownCount}>Type your own</span>
+                </span>
+              </button>
+              <div style={s.dropdownDivider} />
               {CATEGORIES.map(cat => (
                 <div key={cat}>
                   <div style={s.dropdownCat}>{cat}</div>
@@ -629,7 +740,7 @@ export default function HandLandmarkerDemo() {
           )}
         </div>
 
-        {selectedLabel && (() => {
+        {selectedLabel && !isCustom && (() => {
           const url = selectedLabel.videoUrl ??
             `https://www.youtube.com/results?search_query=${encodeURIComponent("لغة الإشارة العربية " + selectedLabel.ar)}`;
           return (
@@ -678,16 +789,26 @@ export default function HandLandmarkerDemo() {
     setImgCursor(nextCursor);
   }
 
+  const activeLabel = getActiveLabel();
+  const isCustom = !!selectedLabel?.custom;
   const canRecord = !!(
     captureMode === MODE.CAMERA &&
-    selectedLabel &&
+    activeLabel &&
     status !== STATUS.LOADING &&
+    recStatus !== REC.SAVING &&
+    staticCountdown === 0
+  );
+  const canSaveStatic = !!(
+    signType === "static" &&
+    pendingStatic &&
+    activeLabel &&
     recStatus !== REC.SAVING
   );
 
   const completedCount = LABELS.filter(l => (counts[labelToPath(l.ar)] || 0) >= REQUIRED).length;
   const currentUploadEntry = captureMode === MODE.UPLOAD ? imgQueue[imgCursor] || null : null;
   const validUploadCount = imgQueue.filter(entry => entry.landmarks).length;
+  const displayLandmarkData = pendingStatic ? [pendingStatic] : landmarkData;
 
   useEffect(() => {
     if (captureMode !== MODE.UPLOAD) return;
@@ -816,7 +937,7 @@ export default function HandLandmarkerDemo() {
                   type="checkbox"
                   checked={mirrorable}
                   onChange={e => setMirrorable(e.target.checked)}
-                  disabled={recStatus === REC.RECORDING || recStatus === REC.SAVING}
+                  disabled={!isCustom || recStatus === REC.RECORDING || recStatus === REC.SAVING}
                   style={{ marginRight: 6, accentColor: "#6366f1" }}
                 />
                 Mirrorable
@@ -827,13 +948,23 @@ export default function HandLandmarkerDemo() {
                     key={t}
                     style={{ ...s.toggleBtn, ...(signType === t ? s.toggleActive : {}) }}
                     onClick={() => setSignType(t)}
-                    disabled={recStatus === REC.RECORDING || recStatus === REC.SAVING}
+                    disabled={!isCustom || recStatus === REC.RECORDING || recStatus === REC.SAVING}
                   >
                     {t[0].toUpperCase() + t.slice(1)}
                   </button>
                 ))}
               </div>
             </div>
+
+            {isCustom && (
+              <input
+                type="text"
+                value={customLabel}
+                onChange={e => setCustomLabel(e.target.value)}
+                placeholder="Type custom sign label"
+                style={s.customInput}
+              />
+            )}
 
             <button
               style={{
@@ -844,10 +975,28 @@ export default function HandLandmarkerDemo() {
               onClick={toggleRecording}
               disabled={!canRecord && recStatus !== REC.RECORDING}
             >
-              {recStatus === REC.RECORDING
-                ? `◉  Stop · ${liveFrameCount} frames`
-                : "Start Recording"}
+              {signType === "static"
+                ? staticCountdown > 0
+                  ? `Capturing in ${staticCountdown}s…`
+                  : "Capture (3s)"
+                : recStatus === REC.RECORDING
+                  ? `◉  Stop · ${liveFrameCount} frames`
+                  : "Start Recording"}
             </button>
+
+            {signType === "static" && (
+              <button
+                type="button"
+                style={{
+                  ...s.recordBtn,
+                  ...(!canSaveStatic ? s.recordBtnDisabled : {}),
+                }}
+                onClick={saveStaticCapture}
+                disabled={!canSaveStatic}
+              >
+                Save Capture
+              </button>
+            )}
 
             {recStatus === REC.ERROR && recError && (
               <div style={s.recError}>{recError}</div>
@@ -869,6 +1018,16 @@ export default function HandLandmarkerDemo() {
           </div>
           <div style={s.panelBody}>
             {renderSignDropdown(recStatus === REC.RECORDING || recStatus === REC.SAVING || imgSaveStatus === REC.SAVING)}
+
+            {isCustom && (
+              <input
+                type="text"
+                value={customLabel}
+                onChange={e => setCustomLabel(e.target.value)}
+                placeholder="Type custom sign label"
+                style={s.customInput}
+              />
+            )}
 
             <input
               ref={fileInputRef}
@@ -953,9 +1112,9 @@ export default function HandLandmarkerDemo() {
                 type="button"
                 style={{
                   ...s.commitBtn,
-                  ...((currentUploadEntry?.landmarks && selectedLabel) ? s.commitBtnValid : {}),
+                  ...((currentUploadEntry?.landmarks && activeLabel) ? s.commitBtnValid : {}),
                 }}
-                disabled={!currentUploadEntry?.landmarks || !selectedLabel || imgSaveStatus === REC.SAVING}
+                disabled={!currentUploadEntry?.landmarks || !activeLabel || imgSaveStatus === REC.SAVING}
                 onClick={commitCurrent}
               >
                 Commit This
@@ -964,9 +1123,9 @@ export default function HandLandmarkerDemo() {
                 type="button"
                 style={{
                   ...s.commitBtn,
-                  ...(validUploadCount > 0 && selectedLabel ? s.commitBtnValid : {}),
+                  ...(validUploadCount > 0 && activeLabel ? s.commitBtnValid : {}),
                 }}
-                disabled={!validUploadCount || !selectedLabel || imgSaveStatus === REC.SAVING}
+                disabled={!validUploadCount || !activeLabel || imgSaveStatus === REC.SAVING}
                 onClick={commitAllValid}
               >
                 Commit All Valid
@@ -975,7 +1134,9 @@ export default function HandLandmarkerDemo() {
 
             {selectedLabel && (
               <div style={{ color: "#94a3b8", fontSize: 13 }}>
-                Saving as <span dir="rtl" style={{ fontWeight: 700, color: "#e2e8f0" }}>{selectedLabel.ar}</span>
+                Saving as <span dir="rtl" style={{ fontWeight: 700, color: "#e2e8f0" }}>
+                  {activeLabel ? activeLabel.ar : (selectedLabel.custom ? "Custom sign" : selectedLabel.ar)}
+                </span>
                 <span> · {signType} · {mirrorable ? "mirrorable" : "not mirrorable"}</span>
               </div>
             )}
@@ -991,13 +1152,13 @@ export default function HandLandmarkerDemo() {
         <div style={s.panelHeader}>
           Raw Landmark Data
           <span style={s.panelSub}>
-            {landmarkData
-              ? `${landmarkData.length} hand${landmarkData.length > 1 ? "s" : ""} · 21 points each`
+            {displayLandmarkData
+              ? `${displayLandmarkData.length} hand${displayLandmarkData.length > 1 ? "s" : ""} · 21 points each`
               : "waiting for detection…"}
           </span>
         </div>
         <pre style={s.pre}>
-          {landmarkData ? JSON.stringify(landmarkData, null, 2) : "null"}
+          {displayLandmarkData ? JSON.stringify(displayLandmarkData, null, 2) : "null"}
         </pre>
       </div>
     </div>
@@ -1115,6 +1276,7 @@ const s = {
     transition: "background 0.1s", textAlign: "left",
   },
   dropdownItemActive: { background: "#1e1b4b" },
+  dropdownDivider: { height: 1, background: "#334155", margin: "4px 0" },
   dropdownAr: { fontSize: 17, fontWeight: 600 },
   dropdownRight: { display: "flex", alignItems: "center", gap: 8, flexShrink: 0 },
   dropdownBar: {
@@ -1133,6 +1295,11 @@ const s = {
   refFallback: { color: "#475569", fontSize: 11 },
   panelBody: { display: "flex", flexDirection: "column", gap: 12, padding: 16 },
   optRow: { display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" },
+  customInput: {
+    width: "100%", padding: "10px 12px", borderRadius: 8,
+    border: "1px solid #334155", background: "#0f172a", color: "#e2e8f0",
+    fontSize: 14, fontFamily: "inherit",
+  },
   checkLabel: {
     display: "flex", alignItems: "center", fontSize: 14,
     color: "#94a3b8", cursor: "pointer", userSelect: "none",
