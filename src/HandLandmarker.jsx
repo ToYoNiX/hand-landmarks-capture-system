@@ -631,6 +631,7 @@ export default function HandLandmarkerDemo() {
     uploadSample([{ landmarks: normalizeHand(entry.landmarks) }], activeLabel, signType, mirrorable)
       .then(() => {
         setImgSaveStatus(REC.SAVED);
+        removeImages(item => item === entry);
         clearTimeout(resetTimerRef.current);
         resetTimerRef.current = setTimeout(() => setImgSaveStatus(REC.IDLE), 2500);
       })
@@ -652,6 +653,7 @@ export default function HandLandmarkerDemo() {
         await delay(50);
       }
       setImgSaveStatus(REC.SAVED);
+      removeImages(entry => !!entry.landmarks);
       clearTimeout(resetTimerRef.current);
       resetTimerRef.current = setTimeout(() => setImgSaveStatus(REC.IDLE), 2500);
     } catch (err) {
@@ -779,6 +781,25 @@ export default function HandLandmarkerDemo() {
     if (!entry) return;
     URL.revokeObjectURL(entry.objectUrl);
     const next = imgQueueRef.current.filter((_, i) => i !== index);
+    setImageQueue(next);
+    if (!next.length) {
+      setImgCursor(0);
+      clearCanvas();
+      return;
+    }
+    const nextCursor = Math.min(imgCursorRef.current, next.length - 1);
+    setImgCursor(nextCursor);
+  }
+
+  function removeImages(predicate) {
+    const next = [];
+    for (const entry of imgQueueRef.current) {
+      if (predicate(entry)) {
+        URL.revokeObjectURL(entry.objectUrl);
+      } else {
+        next.push(entry);
+      }
+    }
     setImageQueue(next);
     if (!next.length) {
       setImgCursor(0);
