@@ -105,20 +105,63 @@ export default function HandLandmarkerDemo() {
   useEffect(() => {
     if (!supabase) return;
     async function fetchCounts() {
-      const { data, error } = await supabase.storage
-        .from("arsl-dataset")
-        .list("raw", { limit: 2000 });
-      if (error || !data) return;
-
       const map = {};
-      for (const file of data) {
-        const match = file.name.match(/^(.+)-\d+\.json$/);
-        if (match) map[match[1]] = (map[match[1]] || 0) + 1;
+      const limit = 1000;
+      let offset = 0;
+
+      while (true) {
+        const { data, error } = await supabase.storage
+          .from("arsl-dataset")
+          .list("raw", { limit, offset });
+        if (error || !data) return;
+
+        for (const file of data) {
+          if (!file.name || file.name === ".emptyFolderPlaceholder") continue;
+          const match = file.name.match(/^(.+)-.+\.json$/);
+          if (match) map[match[1]] = (map[match[1]] || 0) + 1;
+        }
+
+        if (data.length < limit) break;
+        offset += limit;
       }
+
       setCounts(map);
     }
     fetchCounts();
   }, []);
+
+  useEffect(() => {
+    if (!supabase || !selectedLabel || selectedLabel.custom) return;
+    let cancelled = false;
+    async function fetchSelectedCount() {
+      const key = labelToPath(selectedLabel.ar);
+      const limit = 1000;
+      let offset = 0;
+      let count = 0;
+
+      while (true) {
+        const { data, error } = await supabase.storage
+          .from("arsl-dataset")
+          .list("raw", { limit, offset });
+        if (error || !data) return;
+
+        for (const file of data) {
+          if (!file.name || file.name === ".emptyFolderPlaceholder") continue;
+          if (file.name.startsWith(`${key}-`)) count += 1;
+        }
+
+        if (data.length < limit) break;
+        offset += limit;
+      }
+
+      if (!cancelled) {
+        setCounts(prev => ({ ...prev, [key]: count }));
+      }
+    }
+
+    fetchSelectedCount();
+    return () => { cancelled = true; };
+  }, [selectedLabel]);
 
   // ── Close dropdown on outside click ───────────────────────────────────────
   useEffect(() => {
