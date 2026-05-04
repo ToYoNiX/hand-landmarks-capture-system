@@ -830,6 +830,14 @@ export default function HandLandmarkerDemo() {
   const currentUploadEntry = captureMode === MODE.UPLOAD ? imgQueue[imgCursor] || null : null;
   const validUploadCount = imgQueue.filter(entry => entry.landmarks).length;
   const displayLandmarkData = pendingStatic ? [pendingStatic] : landmarkData;
+  const uploadStatus = !currentUploadEntry
+    ? STATUS.NO_HAND
+    : currentUploadEntry.status === "ok"
+      ? STATUS.DETECTING
+      : currentUploadEntry.status === "error"
+        ? STATUS.NO_HAND
+        : STATUS.LOADING;
+  const displayStatus = captureMode === MODE.UPLOAD ? uploadStatus : status;
 
   useEffect(() => {
     if (captureMode !== MODE.UPLOAD) return;
@@ -858,9 +866,9 @@ export default function HandLandmarkerDemo() {
         <div style={s.sessionBadge}>{sessionCount} saved this session</div>
       </div>
 
-      <div style={{ ...s.pill, background: STATUS_COLORS[status] }}>
+      <div style={{ ...s.pill, background: STATUS_COLORS[displayStatus] }}>
         <span style={s.pillDot} />
-        {STATUS_LABELS[status]}
+        {STATUS_LABELS[displayStatus]}
       </div>
 
       {detectionErr && <div style={s.errorBox}>{detectionErr}</div>}
