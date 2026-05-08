@@ -78,6 +78,9 @@ export default function HandLandmarkerDemo() {
   const imgProcessingRef   = useRef(false);
   const isSwitchingModeRef = useRef(false);
   const captureModeRef     = useRef(MODE.CAMERA);
+  const inspCanvasRef      = useRef(null);
+  const inspDropRef        = useRef(null);
+  const inspPlayRef        = useRef(null);
 
   const [status,        setStatus]        = useState(STATUS.LOADING);
   const [landmarkData,  setLandmarkData]  = useState(null);
@@ -100,6 +103,14 @@ export default function HandLandmarkerDemo() {
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [staticCountdown, setStaticCountdown] = useState(0);
   const [pendingStatic, setPendingStatic] = useState(null);
+  const [inspLabelOpen,  setInspLabelOpen]  = useState(false);
+  const [inspLabel,      setInspLabel]      = useState(null);
+  const [inspSamples,    setInspSamples]    = useState([]);
+  const [inspLoading,    setInspLoading]    = useState(false);
+  const [inspSelected,   setInspSelected]   = useState(null);
+  const [inspData,       setInspData]       = useState(null);
+  const [inspFrame,      setInspFrame]      = useState(0);
+  const [inspPlaying,    setInspPlaying]    = useState(false);
 
   // ── Fetch sample counts from Storage ──────────────────────────────────────
   const fetchCounts = useCallback(async () => {
@@ -262,6 +273,39 @@ export default function HandLandmarkerDemo() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
   }
 
+  function drawInspectorFrame(canvas, landmarks) {
+    const ctx = canvas.getContext("2d");
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    if (!landmarks?.length) return;
+    const xs = landmarks.map(l => l.x), ys = landmarks.map(l => l.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const pad = 32;
+    const sc = Math.min((W - pad * 2) / (maxX - minX || 1), (H - pad * 2) / (maxY - minY || 1));
+    const ox = (W - (maxX - minX) * sc) / 2 - minX * sc;
+    const oy = (H - (maxY - minY) * sc) / 2 - minY * sc;
+    const px = lm => lm.x * sc + ox;
+    const py = lm => lm.y * sc + oy;
+    ctx.strokeStyle = "rgba(99,102,241,0.85)";
+    ctx.lineWidth = 2;
+    for (const [a, b] of HAND_CONNECTIONS) {
+      ctx.beginPath();
+      ctx.moveTo(px(landmarks[a]), py(landmarks[a]));
+      ctx.lineTo(px(landmarks[b]), py(landmarks[b]));
+      ctx.stroke();
+    }
+    for (let i = 0; i < landmarks.length; i++) {
+      ctx.beginPath();
+      ctx.arc(px(landmarks[i]), py(landmarks[i]), i === 0 ? 6 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = i === 0 ? "#f59e0b" : "#22c55e";
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }
+
   // ── Detection + recording loop ─────────────────────────────────────────────
   const detect = useCallback(function detectFrame() {
     if (captureModeRef.current !== MODE.CAMERA) return;
@@ -351,6 +395,55 @@ export default function HandLandmarkerDemo() {
     const key = labelToPath(label.ar);
     setCounts(prev => ({ ...prev, [key]: (prev[key] || 0) + 1 }));
     setSessionCount(c => c + 1);
+  }
+
+  async function fetchInspectorSamples(label) {
+    if (!supabase || !label) return;
+    setInspLoading(true);
+    setInspSamples([]);
+    setInspSelected(null);
+    setInspData(null);
+    setInspFrame(0);
+    setInspPlaying(false);
+    const key = labelToPath(label.ar);
+    const limit = 1000;
+    let offset = 0;
+    const results = [];
+    while (true) {
+      const { data, error } = await supabase.storage
+        .from("arsl-dataset")
+        .list("raw", { limit, offset });
+      if (error || !data) break;
+      for (const file of data) {
+        if (!file.name || file.name === ".emptyFolderPlaceholder") continue;
+        if (!file.name.startsWith(`${key}-`)) continue;
+        const m = file.name.match(/-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)\.json$/);
+        const date = m
+          ? new Date(m[1].replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/, "T$1:$2:$3.$4Z"))
+          : null;
+        results.push({ name: file.name, path: `raw/${file.name}`, date });
+      }
+      if (data.length < limit) break;
+      offset += limit;
+    }
+    results.sort((a, b) => (b.date || 0) - (a.date || 0));
+    setInspSamples(results);
+    setInspLoading(false);
+  }
+
+  async function loadInspectorSample(sample) {
+    if (!supabase) return;
+    setInspSelected(sample);
+    setInspData(null);
+    setInspFrame(0);
+    setInspPlaying(false);
+    const { data, error } = await supabase.storage
+      .from("arsl-dataset")
+      .download(sample.path);
+    if (error || !data) return;
+    try {
+      setInspData(JSON.parse(await data.text()));
+    } catch { /* ignore */ }
   }
 
   async function handleSwitchMode(mode) {
@@ -871,6 +964,37 @@ export default function HandLandmarkerDemo() {
     };
   }, []);
 
+  // ── Inspector ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!inspLabelOpen) return;
+    function onDown(e) {
+      if (inspDropRef.current && !inspDropRef.current.contains(e.target))
+        setInspLabelOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [inspLabelOpen]);
+
+  useEffect(() => {
+    const canvas = inspCanvasRef.current;
+    if (!canvas) return;
+    if (!inspData) {
+      canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    const frame = inspData.frames?.[inspFrame];
+    if (frame?.landmarks) drawInspectorFrame(canvas, frame.landmarks);
+  }, [inspData, inspFrame]);
+
+  useEffect(() => {
+    if (!inspPlaying || !inspData) return;
+    const total = inspData.frames?.length || 1;
+    inspPlayRef.current = setInterval(() => {
+      setInspFrame(f => (f + 1) % total);
+    }, 80);
+    return () => clearInterval(inspPlayRef.current);
+  }, [inspPlaying, inspData]);
+
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div style={s.root}>
@@ -1203,6 +1327,150 @@ export default function HandLandmarkerDemo() {
           {displayLandmarkData ? JSON.stringify(displayLandmarkData, null, 2) : "null"}
         </pre>
       </div>
+
+      <div style={{ ...s.panel, overflow: "visible" }}>
+        <div style={s.panelHeader}>
+          Sample Inspector
+          <span style={s.panelSub}>
+            {inspLoading ? "loading…" : inspLabel ? `${inspSamples.length} samples` : "pick a sign to start"}
+          </span>
+        </div>
+        <div style={s.panelBody}>
+
+          {/* Label picker */}
+          <div ref={inspDropRef} style={s.dropdownWrap}>
+            <button style={s.dropdownBtn} onClick={() => setInspLabelOpen(o => !o)}>
+              {inspLabel ? (
+                <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span dir="rtl" style={{ fontSize: 18, fontWeight: 700 }}>{inspLabel.ar}</span>
+                  <span style={s.dropdownMeta}>{inspLabel.type}</span>
+                </span>
+              ) : (
+                <span style={{ color: "#475569" }}>Select a sign to inspect…</span>
+              )}
+              <span style={s.dropdownArrow}>{inspLabelOpen ? "▲" : "▼"}</span>
+            </button>
+            {inspLabelOpen && (
+              <div style={s.dropdownMenu}>
+                {CATEGORIES.map(cat => (
+                  <div key={cat}>
+                    <div style={s.dropdownCat}>{cat}</div>
+                    {LABELS.filter(l => l.category === cat).map(l => (
+                      <button
+                        key={l.ar}
+                        style={{ ...s.dropdownItem, ...(inspLabel?.ar === l.ar ? s.dropdownItemActive : {}) }}
+                        onClick={() => { setInspLabel(l); setInspLabelOpen(false); fetchInspectorSamples(l); }}
+                      >
+                        <span dir="rtl" style={s.dropdownAr}>{l.ar}</span>
+                        <span style={{ ...s.dropdownCount, color: "#64748b" }}>
+                          {counts[labelToPath(l.ar)] || 0} samples
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Sample list — always rendered at fixed height */}
+          <div style={s.inspSampleList}>
+            {inspLoading ? (
+              <span style={{ color: "#475569", fontSize: 13, padding: "4px 2px" }}>Loading samples…</span>
+            ) : !inspLabel ? (
+              <span style={{ color: "#334155", fontSize: 13, padding: "4px 2px" }}>Select a sign above to browse its captured samples.</span>
+            ) : inspSamples.length === 0 ? (
+              <span style={{ color: "#475569", fontSize: 13, padding: "4px 2px" }}>No samples captured yet for this sign.</span>
+            ) : inspSamples.map((sample, i) => (
+              <button
+                key={sample.path}
+                style={{ ...s.inspSampleCard, ...(inspSelected?.path === sample.path ? s.inspSampleCardActive : {}) }}
+                onClick={() => loadInspectorSample(sample)}
+              >
+                <span style={s.inspSampleIndex}>#{inspSamples.length - i}</span>
+                <span style={s.inspSampleDate}>
+                  {sample.date
+                    ? sample.date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })
+                    : "—"}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {/* Viewer — always rendered */}
+          <div style={s.inspViewer}>
+            <div style={s.inspCanvasWrap}>
+              <canvas ref={inspCanvasRef} width={300} height={300} style={s.inspCanvas} />
+              {!inspData && (
+                <div style={s.inspCanvasPlaceholder}>
+                  {inspSelected && !inspData ? "Loading…" : "Select a sample"}
+                </div>
+              )}
+            </div>
+            <div style={s.inspInfo}>
+              <div style={s.inspInfoRow}>
+                <span style={s.inspInfoKey}>Label</span>
+                <span dir="rtl" style={s.inspInfoVal}>{inspData?.label ?? "—"}</span>
+              </div>
+              <div style={s.inspInfoRow}>
+                <span style={s.inspInfoKey}>Type</span>
+                <span style={s.inspInfoVal}>{inspData?.type ?? "—"}</span>
+              </div>
+              <div style={s.inspInfoRow}>
+                <span style={s.inspInfoKey}>Frames</span>
+                <span style={s.inspInfoVal}>{inspData?.frames?.length ?? "—"}</span>
+              </div>
+              <div style={s.inspInfoRow}>
+                <span style={s.inspInfoKey}>Mirrorable</span>
+                <span style={s.inspInfoVal}>{inspData ? (inspData.mirrorable ? "yes" : "no") : "—"}</span>
+              </div>
+              <div style={s.inspInfoRow}>
+                <span style={s.inspInfoKey}>Captured</span>
+                <span style={s.inspInfoVal}>
+                  {inspData?.captured_at ? new Date(inspData.captured_at).toLocaleString() : "—"}
+                </span>
+              </div>
+              <div style={s.inspInfoRow}>
+                <span style={s.inspInfoKey}>File</span>
+                <span style={{ ...s.inspInfoVal, fontSize: 11, wordBreak: "break-all" }}>
+                  {inspSelected?.name ?? "—"}
+                </span>
+              </div>
+              <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button
+                    style={{
+                      ...s.inspPlayBtn,
+                      background: inspPlaying ? "#450a0a" : "#1e293b",
+                      borderColor: inspPlaying ? "#dc2626" : "#334155",
+                      color: inspPlaying ? "#fca5a5" : "#e2e8f0",
+                      opacity: (inspData?.frames?.length ?? 0) > 1 ? 1 : 0.3,
+                      cursor: (inspData?.frames?.length ?? 0) > 1 ? "pointer" : "not-allowed",
+                    }}
+                    disabled={!inspData || inspData.frames?.length <= 1}
+                    onClick={() => setInspPlaying(p => !p)}
+                  >
+                    {inspPlaying ? "⏸ Pause" : "▶ Play"}
+                  </button>
+                  <span style={{ color: "#64748b", fontSize: 12 }}>
+                    {inspData ? `${inspFrame + 1} / ${inspData.frames.length}` : "— / —"}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max((inspData?.frames?.length ?? 1) - 1, 0)}
+                  value={inspFrame}
+                  disabled={!inspData || inspData.frames?.length <= 1}
+                  onChange={e => { setInspPlaying(false); setInspFrame(Number(e.target.value)); }}
+                  style={{ width: "100%", accentColor: "#6366f1", opacity: (inspData?.frames?.length ?? 0) > 1 ? 1 : 0.3 }}
+                />
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
     </div>
   );
 }
@@ -1394,6 +1662,39 @@ const s = {
     cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s",
   },
   commitBtnValid: { borderColor: "#6366f1", color: "#a5b4fc" },
+  inspSampleList: {
+    display: "flex", flexWrap: "wrap", gap: 6, minHeight: 46, maxHeight: 180, overflowY: "auto",
+    alignContent: "flex-start",
+  },
+  inspSampleCard: {
+    display: "flex", flexDirection: "column", alignItems: "center", gap: 2,
+    padding: "6px 10px", background: "#0f172a", border: "1px solid #334155",
+    borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+    color: "#94a3b8", transition: "border-color 0.15s", minWidth: 72,
+  },
+  inspSampleCardActive: { borderColor: "#6366f1", color: "#a5b4fc" },
+  inspSampleIndex: { fontSize: 13, fontWeight: 700, color: "#e2e8f0" },
+  inspSampleDate: { fontSize: 10, color: "#64748b" },
+  inspViewer: {
+    display: "flex", gap: 16, alignItems: "flex-start", flexWrap: "wrap",
+  },
+  inspCanvasWrap: {
+    position: "relative", background: "#0f172a", borderRadius: 10, border: "1px solid #334155",
+    overflow: "hidden", flexShrink: 0,
+  },
+  inspCanvasPlaceholder: {
+    position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center",
+    color: "#334155", fontSize: 13, pointerEvents: "none",
+  },
+  inspCanvas: { display: "block", width: 240, height: 240 },
+  inspInfo: { flex: 1, minWidth: 160, display: "flex", flexDirection: "column", gap: 6 },
+  inspInfoRow: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, fontSize: 13 },
+  inspInfoKey: { color: "#64748b", flexShrink: 0 },
+  inspInfoVal: { color: "#e2e8f0", fontWeight: 600, textAlign: "right" },
+  inspPlayBtn: {
+    padding: "6px 14px", borderRadius: 8, border: "1px solid #334155",
+    fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s",
+  },
   pre: {
     margin: 0, padding: "12px 16px", fontSize: 11, lineHeight: 1.6,
     overflowY: "auto", maxHeight: 280, color: "#7dd3fc",
