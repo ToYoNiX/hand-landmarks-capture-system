@@ -2,6 +2,7 @@ export const REQUIRED = 50;
 
 export const LABELS = [
   // ── Numbers ────────────────────────────────────────────────────────────────
+  { ar: "صفر",    category: "الارقام",     type: "static",  mirrorable: true, videoUrl: null },
   { ar: "واحد",    category: "الارقام",     type: "static",  mirrorable: true, videoUrl: null },
   { ar: "اثنان",   category: "الارقام",     type: "static",  mirrorable: true, videoUrl: null },
   { ar: "ثلاثة",   category: "الارقام",     type: "static",  mirrorable: true, videoUrl: null },
@@ -11,7 +12,6 @@ export const LABELS = [
   { ar: "سبعة",    category: "الارقام",     type: "static",  mirrorable: true, videoUrl: null },
   { ar: "ثمانية",  category: "الارقام",     type: "static",  mirrorable: true, videoUrl: null },
   { ar: "تسعة",    category: "الارقام",     type: "static",  mirrorable: true, videoUrl: null },
-  { ar: "عشرة",    category: "الارقام",     type: "static",  mirrorable: true, videoUrl: null },
 
   // ── Letters ────────────────────────────────────────────────────────────────
   { ar: "ا", category: "الحروف", type: "static", mirrorable: true, videoUrl: null },
