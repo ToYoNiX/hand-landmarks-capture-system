@@ -46,6 +46,12 @@ function labelToPath(label) {
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
+function pathToLabel(path) {
+  const b64 = path.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = b64 + "==".slice(0, (4 - (b64.length % 4)) % 4);
+  try { return decodeURIComponent(escape(atob(padded))); } catch { return path; }
+}
+
 function toRoundedLandmarks(landmarks) {
   return landmarks.map(({ x, y, z }) => ({
     x: +x.toFixed(4),
@@ -111,11 +117,13 @@ export default function HandLandmarkerDemo() {
   const [inspData,       setInspData]       = useState(null);
   const [inspFrame,      setInspFrame]      = useState(0);
   const [inspPlaying,    setInspPlaying]    = useState(false);
+  const [supabaseOnlyLabels, setSupabaseOnlyLabels] = useState([]);
 
   // ── Fetch sample counts from Storage ──────────────────────────────────────
   const fetchCounts = useCallback(async () => {
     if (!supabase) return;
     const map = {};
+    const foundKeys = new Set();
     const limit = 1000;
     let offset = 0;
 
@@ -128,7 +136,11 @@ export default function HandLandmarkerDemo() {
       for (const file of data) {
         if (!file.name || file.name === ".emptyFolderPlaceholder") continue;
         const match = file.name.match(/^(.+)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/);
-        if (match) map[match[1]] = (map[match[1]] || 0) + 1;
+        if (match) {
+          const key = match[1];
+          map[key] = (map[key] || 0) + 1;
+          foundKeys.add(key);
+        }
       }
 
       if (data.length < limit) break;
@@ -136,6 +148,13 @@ export default function HandLandmarkerDemo() {
     }
 
     setCounts(map);
+
+    const knownKeys = new Set(LABELS.map(l => labelToPath(l.ar)));
+    const extras = [...foundKeys]
+      .filter(k => !knownKeys.has(k))
+      .map(k => ({ ar: pathToLabel(k), type: "unknown" }))
+      .sort((a, b) => a.ar.localeCompare(b.ar));
+    setSupabaseOnlyLabels(extras);
   }, []);
 
   useEffect(() => { fetchCounts(); }, [fetchCounts]);
@@ -966,6 +985,10 @@ export default function HandLandmarkerDemo() {
 
   // ── Inspector ──────────────────────────────────────────────────────────────
   useEffect(() => {
+    if (inspLabelOpen) fetchCounts();
+  }, [inspLabelOpen, fetchCounts]);
+
+  useEffect(() => {
     if (!inspLabelOpen) return;
     function onDown(e) {
       if (inspDropRef.current && !inspDropRef.current.contains(e.target))
@@ -1369,6 +1392,24 @@ export default function HandLandmarkerDemo() {
                     ))}
                   </div>
                 ))}
+                {supabaseOnlyLabels.length > 0 && (
+                  <div>
+                    <div style={s.dropdownDivider} />
+                    <div style={s.dropdownCat}>Other (Supabase only)</div>
+                    {supabaseOnlyLabels.map(l => (
+                      <button
+                        key={l.ar}
+                        style={{ ...s.dropdownItem, ...(inspLabel?.ar === l.ar ? s.dropdownItemActive : {}) }}
+                        onClick={() => { setInspLabel(l); setInspLabelOpen(false); fetchInspectorSamples(l); }}
+                      >
+                        <span dir="rtl" style={s.dropdownAr}>{l.ar}</span>
+                        <span style={{ ...s.dropdownCount, color: "#64748b" }}>
+                          {counts[labelToPath(l.ar)] || 0} samples
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
